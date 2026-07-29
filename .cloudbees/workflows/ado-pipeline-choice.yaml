@@ -1,0 +1,75 @@
+apiVersion: automation.cloudbees.io/v1alpha1
+kind: workflow
+name: Run Azure DevOps Pipeline
+on:
+  workflow_dispatch:
+    inputs:
+      pipeline:
+        type: choice
+        options:
+          - team-a-build
+          - team-a-deploy
+          - team-b-build
+        default: team-a-build
+        description: Which curated Azure DevOps pipeline to run.
+      branch:
+        type: string
+        required: true
+        default: refs/heads/main
+        description: Full Git branch reference used by the Azure Pipeline.
+jobs:
+  run-ado-pipeline:
+    steps:
+      # Maintain the mapping of friendly name -> real ADO pipeline ID here.
+      # Add a new "case" line whenever a pipeline is added to the "options" list above.
+      - id: resolve-pipeline
+        name: Resolve pipeline ID
+        uses: docker://alpine:3.20
+        shell: sh
+        run: |
+          set -eu
+          case "$PIPELINE_CHOICE" in
+            team-a-build)  ID="12" ;;
+            team-a-deploy) ID="42" ;;
+            team-b-build)  ID="7"  ;;
+            *)
+              echo "Unrecognized pipeline choice: $PIPELINE_CHOICE"
+              exit 1
+              ;;
+          esac
+          echo "Resolved '${PIPELINE_CHOICE}' to pipeline ID ${ID}"
+          printf %s "${ID}" > "$CLOUDBEES_OUTPUTS/pipeline-id"
+        env:
+          PIPELINE_CHOICE: ${{ inputs.pipeline }}
+
+      - name: Start Azure DevOps pipeline
+        with:
+          entrypoint: /usr/local/bin/python
+          args: -m ado_actions.main pipeline
+        uses: docker://ghcr.io/shozab-unify-examples/cloudbees-ado-actions:v1
+        id: ado_pipeline
+        timeout-minutes: 35
+        env:
+          ADO_ORGANIZATION: ${{ vars.ADO_ORGANIZATION }}
+          ADO_PROJECT: ${{ vars.ADO_PROJECT }}
+          ADO_PIPELINE_ID: ${{ steps.resolve-pipeline.outputs.pipeline-id }}
+          ADO_BRANCH: ${{ inputs.branch }}
+          ADO_TEMPLATE_PARAMETERS: "{}"
+          ADO_VARIABLES: "{}"
+          ADO_WAIT_FOR_COMPLETION: "true"
+          ADO_FAIL_ON_UNSUCCESSFUL: "true"
+          ADO_PREVIEW_RUN: "false"
+          ADO_POLL_INTERVAL_SECONDS: "10"
+          ADO_WAIT_TIMEOUT_SECONDS: "1800"
+          ADO_API_VERSION: "7.1"
+          ADO_AUTH_TYPE: pat
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+
+      - name: Display Azure DevOps pipeline result
+        uses: docker://alpine:3.20
+        env:
+          RUN_URL: ${{ steps.ado_pipeline.outputs.run-url }}
+          RUN_RESULT: ${{ steps.ado_pipeline.outputs.result }}
+        run: |
+          echo "Result: ${RUN_RESULT}"
+          echo "Run URL: ${RUN_URL}"
