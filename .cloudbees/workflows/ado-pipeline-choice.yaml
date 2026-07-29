@@ -10,7 +10,7 @@ on:
           - disastor-build
           - team-a-deploy
           - team-b-build
-        default: disastor build
+        default: disastor-build
         description: Which curated Azure DevOps pipeline to run.
       branch:
         type: string
