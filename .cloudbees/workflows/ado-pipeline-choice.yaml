@@ -7,10 +7,10 @@ on:
       pipeline:
         type: choice
         options:
-          - team-a-build
+          - disastor build
           - team-a-deploy
           - team-b-build
-        default: team-a-build
+        default: disastor build
         description: Which curated Azure DevOps pipeline to run.
       branch:
         type: string
@@ -29,7 +29,7 @@ jobs:
         run: |
           set -eu
           case "$PIPELINE_CHOICE" in
-            team-a-build)  ID="12" ;;
+            disastor build)  ID="1" ;;
             team-a-deploy) ID="42" ;;
             team-b-build)  ID="7"  ;;
             *)
