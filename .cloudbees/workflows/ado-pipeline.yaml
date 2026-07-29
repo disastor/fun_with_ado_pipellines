@@ -1,0 +1,49 @@
+apiVersion: automation.cloudbees.io/v1alpha1
+kind: workflow
+name: Run Azure DevOps Pipeline
+on:
+  workflow_dispatch:
+    inputs:
+      pipeline_id:
+        type: string
+        required: true
+        description: Azure DevOps pipeline definition ID.
+      branch:
+        type: string
+        required: true
+        default: refs/heads/main
+        description: Full Git branch reference used by the Azure Pipeline.
+jobs:
+  run-ado-pipeline:
+    steps:
+      - name: Start Azure DevOps pipeline
+        with:
+          entrypoint: /usr/local/bin/python
+          args: -m ado_actions.main pipeline
+        uses: docker://ghcr.io/shozab-unify-examples/cloudbees-ado-actions:v1
+        id: ado_pipeline
+        timeout-minutes: 35
+        env:
+          ADO_ORGANIZATION: ${{ vars.ADO_ORGANIZATION }}
+          ADO_PROJECT: ${{ vars.ADO_PROJECT }}
+          ADO_PIPELINE_ID: ${{ inputs.pipeline_id }}
+          ADO_BRANCH: ${{ inputs.branch }}
+          ADO_TEMPLATE_PARAMETERS: "{}"
+          ADO_VARIABLES: "{}"
+          ADO_WAIT_FOR_COMPLETION: "true"
+          ADO_FAIL_ON_UNSUCCESSFUL: "true"
+          ADO_PREVIEW_RUN: "false"
+          ADO_POLL_INTERVAL_SECONDS: "10"
+          ADO_WAIT_TIMEOUT_SECONDS: "1800"
+          ADO_API_VERSION: "7.1"
+          ADO_AUTH_TYPE: pat
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+
+      - name: Display Azure DevOps pipeline result
+        uses: docker://alpine:3.20
+        env:
+          RUN_URL: ${{ steps.ado_pipeline.outputs.run-url }}
+          RUN_RESULT: ${{ steps.ado_pipeline.outputs.result }}
+        run: |
+          echo "Result: ${RUN_RESULT}"
+          echo "Run URL: ${RUN_URL}"
