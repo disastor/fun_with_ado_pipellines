@@ -7,7 +7,7 @@ on:
       pipeline:
         type: choice
         options:
-          - disastor build
+          - disastor-build
           - team-a-deploy
           - team-b-build
         default: disastor build
@@ -29,7 +29,7 @@ jobs:
         run: |
           set -eu
           case "$PIPELINE_CHOICE" in
-            disastor build)  ID="1" ;;
+            disastor-build)  ID="1" ;;
             team-a-deploy) ID="42" ;;
             team-b-build)  ID="7"  ;;
             *)
