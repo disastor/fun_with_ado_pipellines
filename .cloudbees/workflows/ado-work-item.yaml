@@ -1,0 +1,376 @@
+apiVersion: automation.cloudbees.io/v1alpha1
+kind: workflow
+name: Test Azure DevOps Work Item Action
+
+on:
+  workflow_dispatch:
+
+jobs:
+  query-ado:
+    steps:
+      - name: Query recent Azure Boards work items
+        id: ado
+        uses: docker://ghcr.io/shozab-unify-examples/cloudbees-ado-actions:v1
+
+        env:
+          ADO_OPERATION: query-wiql
+          ADO_ORGANIZATION: ${{ vars.ADO_ORGANIZATION }}
+          ADO_PROJECT: ${{ vars.ADO_PROJECT }}
+
+          ADO_AUTH_TYPE: pat
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+
+          ADO_TOP: '5'
+          ADO_INCLUDE_DETAILS: 'true'
+          ADO_FAIL_IF_EMPTY: 'false'
+          ADO_API_VERSION: '7.1'
+
+          ADO_WIQL: |-
+            SELECT
+              [System.Id],
+              [System.WorkItemType],
+              [System.Title],
+              [System.State],
+              [System.AssignedTo],
+              [System.AreaPath],
+              [System.IterationPath],
+              [System.Tags],
+              [System.CreatedDate],
+              [System.ChangedDate]
+            FROM WorkItems
+            WHERE
+              [System.TeamProject] = @project
+            ORDER BY
+              [System.ChangedDate] DESC
+
+        with:
+          entrypoint: /usr/local/bin/python
+          args: -m ado_actions.main work-item
+
+      - name: Build Azure Boards evidence tables
+        id: evidence
+        uses: docker://python:3.12-slim
+
+        env:
+          ADO_ORGANIZATION: ${{ vars.ADO_ORGANIZATION }}
+          ADO_PROJECT: ${{ vars.ADO_PROJECT }}
+          RESULT_COUNT: ${{ steps.ado.outputs.result-count }}
+          WORK_ITEMS_JSON: ${{ steps.ado.outputs.work-items-json }}
+
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from urllib.parse import quote
+
+
+          class HTMLTextExtractor(HTMLParser):
+              def __init__(self):
+                  super().__init__(convert_charrefs=True)
+                  self.parts = []
+
+              def handle_data(self, data):
+                  self.parts.append(data)
+
+
+          def html_to_text(value):
+              if not value:
+                  return "No description provided"
+
+              parser = HTMLTextExtractor()
+              parser.feed(str(value))
+
+              text = " ".join(
+                  "".join(parser.parts).split()
+              )
+
+              return text or "No description provided"
+
+
+          def identity_name(value):
+              if isinstance(value, dict):
+                  return (
+                      value.get("displayName")
+                      or value.get("uniqueName")
+                      or value.get("id")
+                      or "Unassigned"
+                  )
+
+              return str(value) if value else "Unassigned"
+
+
+          def format_date(value):
+              if not value:
+                  return ""
+
+              try:
+                  parsed = datetime.fromisoformat(
+                      str(value).replace("Z", "+00:00")
+                  )
+                  return parsed.strftime("%Y-%m-%d %H:%M UTC")
+              except ValueError:
+                  return str(value)
+
+
+          def markdown_value(value, maximum=None):
+              if value is None or value == "":
+                  text = "—"
+              else:
+                  text = str(value)
+
+              text = " ".join(text.split())
+              text = text.replace("|", "&#124;")
+
+              if maximum and len(text) > maximum:
+                  text = text[: maximum - 1].rstrip() + "…"
+
+              return text
+
+
+          organization = os.environ.get(
+              "ADO_ORGANIZATION",
+              ""
+          )
+
+          project = os.environ.get(
+              "ADO_PROJECT",
+              ""
+          )
+
+          raw_items = os.environ.get(
+              "WORK_ITEMS_JSON",
+              "[]"
+          )
+
+          try:
+              items = json.loads(raw_items)
+          except json.JSONDecodeError as error:
+              raise RuntimeError(
+                  f"Invalid WORK_ITEMS_JSON: {error}"
+              ) from error
+
+          if isinstance(items, dict):
+              items = items.get("value", [])
+
+          if not isinstance(items, list):
+              raise RuntimeError(
+                  "WORK_ITEMS_JSON must contain a JSON array."
+              )
+
+          summary_rows = []
+          detail_rows = []
+
+          for item in items:
+              fields = item.get("fields", {})
+
+              work_item_id = (
+                  fields.get("System.Id")
+                  or item.get("id")
+                  or ""
+              )
+
+              encoded_org = quote(
+                  organization,
+                  safe=""
+              )
+
+              encoded_project = quote(
+                  project,
+                  safe=""
+              )
+
+              item_url = (
+                  f"https://dev.azure.com/"
+                  f"{encoded_org}/"
+                  f"{encoded_project}/"
+                  f"_workitems/edit/{work_item_id}"
+              )
+
+              linked_id = (
+                  f"[{work_item_id}]({item_url})"
+                  if work_item_id
+                  else "—"
+              )
+
+              work_item_type = fields.get(
+                  "System.WorkItemType",
+                  ""
+              )
+
+              title = fields.get(
+                  "System.Title",
+                  ""
+              )
+
+              state = fields.get(
+                  "System.State",
+                  ""
+              )
+
+              assigned_to = identity_name(
+                  fields.get("System.AssignedTo")
+              )
+
+              changed_date = format_date(
+                  fields.get("System.ChangedDate")
+              )
+
+              area_path = fields.get(
+                  "System.AreaPath",
+                  ""
+              )
+
+              iteration_path = fields.get(
+                  "System.IterationPath",
+                  ""
+              )
+
+              tags = fields.get(
+                  "System.Tags",
+                  ""
+              )
+
+              created_by = identity_name(
+                  fields.get("System.CreatedBy")
+              )
+
+              created_date = format_date(
+                  fields.get("System.CreatedDate")
+              )
+
+              changed_by = identity_name(
+                  fields.get("System.ChangedBy")
+              )
+
+              description = html_to_text(
+                  fields.get("System.Description")
+              )
+
+              summary_rows.append(
+                  "| "
+                  + " | ".join(
+                      [
+                          linked_id,
+                          markdown_value(work_item_type),
+                          markdown_value(title, 100),
+                          markdown_value(state),
+                          markdown_value(assigned_to, 50),
+                          markdown_value(changed_date),
+                      ]
+                  )
+                  + " |"
+              )
+
+              detail_rows.append(
+                  "| "
+                  + " | ".join(
+                      [
+                          linked_id,
+                          markdown_value(area_path, 60),
+                          markdown_value(iteration_path, 60),
+                          markdown_value(tags, 80),
+                          markdown_value(created_by, 50),
+                          markdown_value(created_date),
+                          markdown_value(changed_by, 50),
+                          markdown_value(description, 300),
+                      ]
+                  )
+                  + " |"
+              )
+
+          if not summary_rows:
+              summary_rows.append(
+                  "| — | — | No work items returned | — | — | — |"
+              )
+
+          if not detail_rows:
+              detail_rows.append(
+                  "| — | — | — | — | — | — | — | "
+                  "No work items returned |"
+              )
+
+          evidence = "\n".join(
+              [
+                  "# Azure Boards Integration Evidence",
+                  "",
+                  "## Query Summary",
+                  "",
+                  "| Property | Value |",
+                  "|---|---|",
+                  (
+                      "| Integration status | "
+                      "**CONNECTED** |"
+                  ),
+                  (
+                      "| Azure DevOps organization | "
+                      f"`{markdown_value(organization)}` |"
+                  ),
+                  (
+                      "| Azure DevOps project | "
+                      f"`{markdown_value(project)}` |"
+                  ),
+                  (
+                      "| Work items returned | "
+                      f"**{len(items)}** |"
+                  ),
+                  "",
+                  "## Work Item Summary",
+                  "",
+                  (
+                      "| ID | Type | Title | State | "
+                      "Assigned To | Last Changed |"
+                  ),
+                  (
+                      "|---|---|---|---|---|---|"
+                  ),
+                  *summary_rows,
+                  "",
+                  "## Work Item Details",
+                  "",
+                  (
+                      "| ID | Area Path | Iteration Path | Tags | "
+                      "Created By | Created | Changed By | Description |"
+                  ),
+                  (
+                      "|---|---|---|---|---|---|---|---|"
+                  ),
+                  *detail_rows,
+                  "",
+                  (
+                      "_Descriptions are converted from Azure DevOps "
+                      "HTML to plain text and limited to 300 characters "
+                      "for evidence readability._"
+                  ),
+              ]
+          )
+
+          print(evidence)
+
+          outputs_directory = Path(
+              os.environ["CLOUDBEES_OUTPUTS"]
+          )
+
+          outputs_directory.mkdir(
+              parents=True,
+              exist_ok=True
+          )
+
+          output_file = (
+              outputs_directory
+              / "evidence-content"
+          )
+
+          output_file.write_text(
+              evidence,
+              encoding="utf-8"
+          )
+          PY
+
+      - name: Publish Azure Boards evidence
+        uses: cloudbees-io/publish-evidence-item@v1
+        with:
+          content: ${{ steps.evidence.outputs.evidence-content }}
+          format: MARKDOWN
