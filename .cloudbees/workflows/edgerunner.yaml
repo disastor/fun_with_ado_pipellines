@@ -1,0 +1,23 @@
+apiVersion: automation.cloudbees.io/v1alpha1
+kind: workflow
+name: edgerunner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  hello_action:
+    steps:
+      - name: Say hello
+        uses: cloudbees-io/checkout@v1
+    runs-on:
+      - gcp
+  hello_docker:
+    steps:
+      - name: Say hello
+        run: |
+          echo "Hello world! I'm $(whoami) on $(hostname)"
+        uses: docker://golang:1.20.3-alpine3.17
+        shell: sh
+    runs-on:
+      - gcp
